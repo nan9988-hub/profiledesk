@@ -2,7 +2,7 @@
 
 ProfileDesk 是一个面向 Windows 与 macOS 的本地多账户隔离浏览器工作台。每个账户使用独立的 Chromium Session 目录，Cookie、缓存、登录状态、站点存储、下载目录和代理配置互不共享。
 
-当前版本：`0.2.12`
+当前版本：`0.2.13`
 
 ## 已实现
 
@@ -136,7 +136,25 @@ open "/Applications/ProfileDesk.app"
 
 也可以推送到GitHub后运行仓库自带的双平台构建工作流。
 
-构建脚本固定使用`--publish never`：GitHub Actions只生成并上传Artifact，不会因仓库中存在Draft Release而尝试自动发布。正式发布Release时应使用独立、明确授权的发布流程。
+构建脚本固定使用`--publish never`，避免`electron-builder`自行寻找Token或误发布。工作流使用独立的`release`任务自动发布：只有推送与`package.json`版本完全一致的`v*`标签时，才会在四个平台构建全部成功后创建GitHub Release。发布过程先建立草稿、上传全部文件和统一`SHA256SUMS.txt`，最后再公开，防止用户看到缺少文件的半成品Release。
+
+### GitHub自动发布
+
+以当前版本为例，在项目目录执行：
+
+```bash
+git add .
+git commit -m "Release v0.2.13"
+git push origin HEAD
+git tag v0.2.13
+git push origin v0.2.13
+```
+
+推送标签后，进入仓库的`Actions → Build desktop packages`查看进度。Windows安装版、Windows单文件便携版、Intel Mac和Apple Silicon Mac必须全部构建成功，随后才会自动出现在仓库右侧的`Releases`中。
+
+普通提交和在Actions页面点击`Run workflow`只构建测试包，不会自动公开Release。发布下一版本前必须先修改`package.json`中的版本；标签不匹配时工作流会主动失败，避免把错误版本发布出去。
+
+工作流使用GitHub自动提供的`GITHUB_TOKEN`发布，不需要额外创建个人访问令牌。仓库的Actions权限需要允许工作流写入内容；工作流已经只给发布任务配置`contents: write`，构建任务仍保持只读权限。
 
 Windows 本机不能完成可正常分发的 macOS 签名与公证；可以在 Windows 上把代码推送到 GitHub，然后由工作流的 Windows/macOS 构建机自动生成全部包。
 
