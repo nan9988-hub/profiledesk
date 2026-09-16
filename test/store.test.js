@@ -41,6 +41,22 @@ test('workspace persists account avatars and browser environment presets', async
   assert.equal(reloaded.data.accounts[0].environment.browserPreset, 'chrome');
 });
 
+test('incognito accounts persist configuration but are excluded from session restore', async (t) => {
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'profiledesk-incognito-'));
+  t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
+  const store = new WorkspaceStore(directory);
+  await store.init();
+  const site = await store.addSite({ name: 'Business', homeUrl: 'https://example.com' });
+  const account = await store.addAccount({ siteId: site.id, name: 'Private', storageMode: 'incognito' });
+  await store.setRestoreIds([account.id]);
+  assert.equal(store.findAccount(account.id).storageMode, 'incognito');
+  assert.deepEqual(store.data.restoreIds, []);
+
+  const reloaded = new WorkspaceStore(directory);
+  await reloaded.init();
+  assert.equal(reloaded.findAccount(account.id).storageMode, 'incognito');
+});
+
 test('batch import enforces the maximum row count', async (t) => {
   const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'profiledesk-limit-'));
   t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
@@ -90,4 +106,16 @@ test('removing accounts also removes their snapshots and restore IDs', async (t)
   assert.equal(store.data.accounts.length, 0);
   assert.equal(store.data.snapshots.length, 0);
   assert.deepEqual(store.data.restoreIds, []);
+});
+
+test('snapshot metadata can be removed when an account switches to incognito', async (t) => {
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'profiledesk-private-snapshots-'));
+  t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
+  const store = new WorkspaceStore(directory);
+  await store.init();
+  const site = await store.addSite({ name: 'Business', homeUrl: 'https://example.com' });
+  const account = await store.addAccount({ siteId: site.id, name: 'Private later' });
+  store.data.snapshots.push({ id: 'snap', accountId: account.id });
+  await store.removeSnapshotsForAccounts([account.id]);
+  assert.deepEqual(store.data.snapshots, []);
 });

@@ -7,6 +7,7 @@ const {
   normalizeAutoLogin,
   normalizeEnvironment,
   normalizeProxy,
+  normalizeStorageMode,
   normalizeUrl,
   nowIso,
   publicAccount,
@@ -32,7 +33,11 @@ class WorkspaceStore {
         schemaVersion: 1,
         sites: Array.isArray(parsed.sites) ? parsed.sites : [],
         accounts: Array.isArray(parsed.accounts)
-          ? parsed.accounts.map((account) => ({ ...account, status: 'stopped' }))
+          ? parsed.accounts.map((account) => ({
+            ...account,
+            storageMode: normalizeStorageMode(account.storageMode),
+            status: 'stopped',
+          }))
           : [],
         snapshots: Array.isArray(parsed.snapshots) ? parsed.snapshots : [],
         restoreIds,
@@ -118,6 +123,7 @@ class WorkspaceStore {
         note: row.note,
         tags: typeof row.tags === 'string' ? row.tags.split(',').map((v) => v.trim()).filter(Boolean) : row.tags,
         proxy: row.proxy,
+        storageMode: row.storageMode,
       }, site);
       accounts.push(account);
       created.push(publicAccount(account));
@@ -131,7 +137,7 @@ class WorkspaceStore {
   async updateAccount(id, patch) {
     const account = this.findAccount(id);
     if (!account) throw new Error('账户不存在');
-    const allowed = ['name', 'avatarDataUrl', 'username', 'startUrl', 'currentUrl', 'note', 'tags', 'proxy', 'environment', 'autoLogin', 'status', 'lastError', 'lastOpenedAt'];
+    const allowed = ['name', 'avatarDataUrl', 'username', 'startUrl', 'currentUrl', 'note', 'tags', 'storageMode', 'proxy', 'environment', 'autoLogin', 'status', 'lastError', 'lastOpenedAt'];
     for (const key of allowed) {
       if (!Object.hasOwn(patch, key)) continue;
       if (key === 'name') {
@@ -140,6 +146,7 @@ class WorkspaceStore {
         account.name = name;
       } else if (key === 'avatarDataUrl') account.avatarDataUrl = normalizeAvatarDataUrl(patch.avatarDataUrl);
       else if (key === 'username') account.username = String(patch.username || '').trim().slice(0, 300);
+      else if (key === 'storageMode') account.storageMode = normalizeStorageMode(patch.storageMode);
       else if (key === 'startUrl' || key === 'currentUrl') account[key] = normalizeUrl(patch[key]);
       else if (key === 'proxy') account.proxy = normalizeProxy({ ...account.proxy, ...patch.proxy });
       else if (key === 'environment') account.environment = normalizeEnvironment({ ...account.environment, ...patch.environment });
@@ -172,9 +179,18 @@ class WorkspaceStore {
     await this.save();
   }
 
+  async removeSnapshotsForAccounts(accountIds) {
+    const selected = new Set(accountIds);
+    this.data.snapshots = this.data.snapshots.filter((item) => !selected.has(item.accountId));
+    await this.save();
+  }
+
   async setRestoreIds(ids) {
     this.data.restoreIds = [...new Set(Array.isArray(ids) ? ids : [])]
-      .filter((id) => this.findAccount(id));
+      .filter((id) => {
+        const account = this.findAccount(id);
+        return account && account.storageMode !== 'incognito';
+      });
     await this.save();
   }
 }

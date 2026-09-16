@@ -136,11 +136,11 @@ function renderTree() {
       <div class="site-heading site-color-${safeSiteColor(site.color)}" data-toggle-site="${site.id}" title="${escapeHtml(site.name)}">
         <span class="site-arrow">▾</span><span class="site-icon">${escapeHtml(initial(site.name))}</span><span class="site-name">${escapeHtml(site.name)}</span><span class="count">${accounts.length}</span>
       </div>
-      <div class="site-accounts">${matching.map((account) => `<div class="account-row${account.id === activeAccountId ? ' active' : ''}" data-account-id="${account.id}" title="${escapeHtml(account.name)} · ${escapeHtml(account.username || account.startUrl)}">
+      <div class="site-accounts">${matching.map((account) => `<div class="account-row${account.id === activeAccountId ? ' active' : ''}${account.storageMode === 'incognito' ? ' incognito' : ''}" data-account-id="${account.id}" title="${escapeHtml(account.name)} · ${account.storageMode === 'incognito' ? '无痕账户 · ' : ''}${escapeHtml(account.username || account.startUrl)}">
         <input type="checkbox" data-select-account="${account.id}" ${selectedIds.has(account.id) ? 'checked' : ''} aria-label="选择${escapeHtml(account.name)}">
         <span class="account-avatar">${avatarContent(account.avatarDataUrl, account.name)}</span>
         <span class="dot ${escapeHtml(account.status)}"></span>
-        <div class="account-main"><strong>${escapeHtml(account.name)}</strong><span>${escapeHtml(account.username || account.startUrl)}</span></div>
+        <div class="account-main"><strong>${escapeHtml(account.name)}${account.storageMode === 'incognito' ? '<em class="privacy-badge">无痕</em>' : ''}</strong><span>${escapeHtml(account.username || account.startUrl)}</span></div>
         <button class="row-delete" data-delete-account="${account.id}" title="删除账户" aria-label="删除${escapeHtml(account.name)}">删</button>
       </div>`).join('')}</div>
     </section>`);
@@ -228,7 +228,9 @@ function bindSidebarResizer() {
 function syncActiveUi() {
   const account = accountById(activeAccountId);
   $('#empty-state').hidden = Boolean(account);
-  $('#active-label').textContent = account ? `${siteById(account.siteId)?.name || ''} / ${account.name}` : '未选择账户';
+  $('#active-label').textContent = account ? `${siteById(account.siteId)?.name || ''} / ${account.name}${account.storageMode === 'incognito' ? ' · 无痕' : ''}` : '未选择账户';
+  $('#create-snapshot').disabled = !account || account.storageMode === 'incognito';
+  $('#create-snapshot').title = account?.storageMode === 'incognito' ? '无痕账户不会保存状态快照' : '保存当前账户状态快照';
   if (account) {
     if (document.activeElement !== $('#address')) $('#address').value = account.currentUrl || account.startUrl;
     $('#proxy-mode').value = account.proxy?.mode || 'system';
@@ -424,6 +426,11 @@ function addAccount() {
     avatarField('', '账户'),
     field('登录名/标识', 'username'),
     field('启动地址', 'startUrl', workspace.sites[0].homeUrl, 'url', 'required'),
+    selectField('浏览数据模式', 'storageMode', 'persistent', [
+      ['persistent', '持久模式（保留登录）'],
+      ['incognito', '无痕模式（关闭即清除）'],
+    ]),
+    '<span></span><span class="hint">无痕账户停止、退出软件或崩溃后会清除Cookie、缓存及站点存储，不会自动恢复；手动下载的文件仍会保留。</span>',
   ].join(''), async (data) => {
     const result = await api.addAccount(Object.fromEntries(data));
     selectedIds.add(result.id);
@@ -443,6 +450,11 @@ function editAccount() {
     avatarField(account.avatarDataUrl, account.name),
     field('登录名', 'username', account.username),
     field('启动地址', 'startUrl', account.startUrl, 'url', 'required'),
+    selectField('浏览数据模式', 'storageMode', account.storageMode || 'persistent', [
+      ['persistent', '持久模式（保留登录）'],
+      ['incognito', '无痕模式（关闭即清除）'],
+    ]),
+    '<span></span><span class="hint">切换模式会先停止账户并清除原浏览会话及已有快照。无痕模式不保存Cookie、缓存、站点存储、浏览位置或状态快照；下载文件和账户配置仍保留。</span>',
     selectField('设备类型', 'deviceType', env.deviceType || 'desktop', [
       ['desktop', 'PC桌面设备'],
       ['mobile', '移动设备'],
@@ -470,11 +482,12 @@ function editAccount() {
     field('登录密码', 'password', '', 'password', `placeholder="${login.hasPassword ? '已安全保存；留空保留' : '存入系统安全存储'}" autocomplete="new-password"`),
   ].join(''), async (data) => {
     const next = Object.fromEntries(data);
-    await api.updateAccount(account.id, {
+    const saved = await api.updateAccount(account.id, {
       name: next.name,
       avatarDataUrl: next.avatarDataUrl,
       username: next.username,
       startUrl: next.startUrl,
+      storageMode: next.storageMode,
       environment: {
         ...env,
         deviceType: next.deviceType,
@@ -495,7 +508,9 @@ function editAccount() {
       ...(next.password ? { password: next.password } : {}),
     });
     const applied = await api.applyEnvironment(account.id);
-    showToast(applied.running
+    showToast(saved.cleanupPending
+      ? '配置已保存；旧会话残留将在下次启动前完成清理'
+      : applied.running
       ? `配置已保存；已切换为${applied.label}并自动刷新`
       : '配置已保存；下次打开账户时应用设备环境');
   });
@@ -600,6 +615,7 @@ function editProxy() {
 function openSnapshots() {
   const account = accountById(activeAccountId);
   if (!account) return showToast('请先选择账户', true);
+  if (account.storageMode === 'incognito') return showToast('无痕账户不会保存状态快照', true);
   const items = workspace.snapshots
     .filter((snapshot) => snapshot.accountId === account.id)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -614,6 +630,7 @@ function openSnapshots() {
 async function createSnapshot() {
   const account = accountById(activeAccountId);
   if (!account) return showToast('请先选择账户', true);
+  if (account.storageMode === 'incognito') return showToast('无痕账户不会保存状态快照', true);
   const label = window.prompt('快照名称（可留空）', `${account.name} ${new Date().toLocaleString()}`);
   if (label === null) return;
   await act('正在保存快照…', () => api.createSnapshot(account.id, label));

@@ -2,7 +2,7 @@
 
 ProfileDesk 是一个面向 Windows 与 macOS 的本地多账户隔离浏览器工作台。每个账户使用独立的 Chromium Session 目录，Cookie、缓存、登录状态、站点存储、下载目录和代理配置互不共享。
 
-当前版本：`0.2.11`
+当前版本：`0.2.12`
 
 ## 已实现
 
@@ -12,7 +12,8 @@ ProfileDesk 是一个面向 Windows 与 macOS 的本地多账户隔离浏览器�
 - 批量启动、停止、刷新、清缓存和创建快照。
 - 账户行直接删除，以及带主进程二次确认的批量删除；同步清理隔离Profile、下载、快照和已保存凭据。
 - Windows若仍占用Chromium Profile文件，账户记录会先安全移除，软件自动重启并在会话加载前完成残留文件清理，不再因`EBUSY`中断删除。
-- 每账户独立持久化 Session，不共享 Cookie、缓存或 LocalStorage。
+- 每账户可选择持久模式或无痕模式，两种模式都互相隔离。持久模式保留登录状态；无痕模式使用内存Session，停止账户、退出软件或浏览进程崩溃后自动清除Cookie、缓存、LocalStorage、IndexedDB、Service Worker与浏览位置，并且不会加入下次自动恢复。
+- 无痕模式仍保留账户名称、头像、代理、UA和自动登录配置；用户主动下载的文件也会保留。无痕账户不允许保存状态快照，导出账户配置时不包含临时Cookie。
 - 内置浏览器视图，主窗口支持自由拖动和缩放。
 - 顶部本地网络、强制直连、自定义 HTTP/HTTPS/SOCKS 代理入口。
 - 当前窗口后退、前进、刷新、首页和地址栏。
@@ -44,11 +45,11 @@ ProfileDesk保证本机浏览数据隔离，但不承诺不同账号无法被业
 ## 本地运行
 
 ```bash
-npm install --allow-git=all
+npm ci --allow-git=all
 npm start
 ```
 
-npm 12默认禁止Git来源依赖；Electron构建链包含固定到官方仓库提交的`@electron/node-gyp`，因此安装命令对本次依赖解析显式启用Git来源。Windows本地还需要安装Git for Windows。
+npm 12默认禁止Git来源依赖；Electron构建链包含固定到官方仓库提交的`@electron/node-gyp`，因此安装命令对本次依赖解析显式启用Git来源。项目已包含`package-lock.json`，本地和GitHub构建都使用`npm ci`锁定完整依赖树。Windows本地还需要安装Git for Windows。
 
 npm 12还会阻止未审批的依赖安装脚本。本项目只在`package.json`中批准固定版本的`electron-winstaller@5.4.0`，用于Windows安装包构建；不要使用全量脚本审批。
 
@@ -89,12 +90,28 @@ npm run dist:mac
 
 macOS正式分发需要Apple Developer证书与公证配置；Windows正式分发建议配置代码签名证书。未签名开发包会触发系统安全提醒。
 
+GitHub Actions中的Windows构建会分别显示两个下载项：
+
+- `ProfileDesk-Windows-Installer`：安装版。
+- `ProfileDesk-Windows-Portable`：单文件便携版。
+
+两者都会附带`SHA256SUMS.txt`，构建机还会对输出目录运行Microsoft Defender扫描。安全扫描只能发现已知威胁，不能替代数字签名；未签名且下载量较少的新EXE仍可能被Chrome或SmartScreen以“不常见/可能有危险”拦截。
+
 macOS构建会自动区分两种模式：
 
 - 未配置Developer ID证书：生成无签名开发包，并关闭Hardened Runtime，避免Apple Silicon上“无签名但启用强化运行时”导致应用无法启动。此包只适合自己测试，首次打开仍需在“系统设置 → 隐私与安全性”中选择“仍要打开”。
 - 配置Developer ID证书及公证凭据：保持Hardened Runtime，自动签名并提交Apple公证，适合向其他用户分发。
 
 GitHub Actions正式签名需要在仓库`Settings → Secrets and variables → Actions`中配置：
+
+Windows：
+
+- `WIN_CSC_LINK`：代码签名服务提供的PKCS#12证书路径、可下载地址或Base64内容；具体形式以证书服务商和electron-builder支持方式为准。
+- `WIN_CSC_KEY_PASSWORD`：证书密码。
+
+配置后，工作流会要求安装版和便携版的Authenticode签名状态均为`Valid`，否则构建失败。证书私钥不得提交到GitHub仓库。若使用Azure Artifact Signing或硬件/云托管EV证书，需要按服务商要求把签名步骤接入工作流，不能把不可导出的硬件私钥直接放入Secret。
+
+macOS：
 
 - `MAC_CSC_LINK`：从钥匙串导出的Developer ID Application `.p12`文件的Base64内容。
 - `MAC_CSC_KEY_PASSWORD`：导出`.p12`时设置的密码。

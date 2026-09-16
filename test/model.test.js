@@ -7,6 +7,7 @@ const {
   normalizeAvatarDataUrl,
   normalizeEnvironment,
   normalizeProxy,
+  normalizeStorageMode,
   normalizeUrl,
   publicAccount,
   resolveUserAgent,
@@ -28,6 +29,13 @@ test('creates an isolated account model with safe defaults', () => {
   assert.equal(account.environment.deviceType, 'desktop');
   assert.equal(account.environment.mobileDevice, 'pixel-11-pro');
   assert.equal(account.environment.browserPreset, 'system');
+  assert.equal(account.storageMode, 'persistent');
+});
+
+test('normalizes persistent and incognito storage modes', () => {
+  const site = createSite({ name: 'Demo', homeUrl: 'https://example.com' });
+  assert.equal(createAccount({ name: 'Private', storageMode: 'incognito' }, site).storageMode, 'incognito');
+  assert.equal(normalizeStorageMode('unknown'), 'persistent');
 });
 
 test('normalizes site colors and validates local avatar data', () => {

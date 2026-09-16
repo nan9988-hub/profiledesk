@@ -5,6 +5,7 @@ ProfileDesk 的目标是本机账户隔离与隐私保护，不是规避网站�
 ## 信任边界
 
 - 每个账户使用独立 Chromium Session 目录，Cookie、缓存、LocalStorage、IndexedDB 与 Service Worker 不跨账户共享。
+- 无痕账户使用不带`persist:`前缀的内存Session，停止、退出或崩溃回收时清理Cookie、缓存和站点存储，并从会话自动恢复列表排除。账户配置、操作日志以及用户主动下载的文件仍会保留；无痕不是整台设备的法证级匿名或擦除机制。
 - 网页运行在开启沙箱、上下文隔离且无 Node.js 权限的 WebContentsView 中。
 - 渲染层只能调用预加载脚本公开的固定 IPC 方法，不能访问文件系统或执行任意主进程命令。
 - 自动登录密码与代理密码使用 Windows DPAPI 或 macOS Keychain 背后的 Electron `safeStorage` 加密。
@@ -30,5 +31,6 @@ ProfileDesk 的目标是本机账户隔离与隐私保护，不是规避网站�
 ## 发布前要求
 
 - Windows 安装包应使用代码签名证书；macOS 应完成 Developer ID 签名、公证和 Staple。
+- Windows构建应生成SHA-256校验文件并经过恶意软件扫描；扫描结果不能替代Authenticode签名和人工发布审查。
 - 升级 Electron 前先查看安全公告，并运行 `npm run verify`。
 - 不要在未审计的开发包中保存助记词、根密钥或其他不可恢复的高价值秘密。

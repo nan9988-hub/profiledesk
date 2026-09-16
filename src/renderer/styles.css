@@ -83,6 +83,8 @@ body.resizing-sidebar #app { transition: none; }
 .account-main { min-width: 0; }
 .account-main strong, .account-main span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-main strong { font-weight: 550; }
+.privacy-badge { display: inline-block; margin-left: 6px; padding: 1px 5px; border: 1px solid #7965c7; border-radius: 999px; color: #c9bcff; background: #2b2248; font-size: 9px; font-style: normal; font-weight: 600; vertical-align: 1px; }
+.account-row.incognito .account-avatar { box-shadow: inset 0 0 0 1px #8c75df; }
 .account-main span { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .account-row .row-delete { opacity: .72; padding: 4px 7px; color: #ff9ba6; }
 .account-row .row-delete:hover { opacity: 1; border-color: #9e4050; background: #351723; }

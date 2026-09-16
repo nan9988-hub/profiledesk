@@ -31,8 +31,8 @@ try {
     Write-Host "Node.js: $nodeVersion"
 
     Write-Host "`n[1/3] Installing dependencies..." -ForegroundColor Cyan
-    & npm.cmd install --allow-git=all
-    if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
+    & npm.cmd ci --allow-git=all
+    if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE" }
 
     Write-Host "`n[2/3] Running checks..." -ForegroundColor Cyan
     & npm.cmd run verify
@@ -41,6 +41,21 @@ try {
     Write-Host "`n[3/3] Building installer and portable package..." -ForegroundColor Cyan
     & npm.cmd run dist:win
     if ($LASTEXITCODE -ne 0) { throw "npm run dist:win failed with exit code $LASTEXITCODE" }
+
+    $executables = @(Get-ChildItem -LiteralPath $releaseDirectory -Filter 'ProfileDesk*.exe' -File | Where-Object {
+        $_.Name -match '^ProfileDesk( Setup)? \d+\.\d+\.\d+\.exe$'
+    })
+    if ($executables.Count -ne 2) { throw 'Installer or portable executable is missing from release.' }
+    $hashLines = $executables | Sort-Object Name | ForEach-Object {
+        $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$hash *$($_.Name)"
+    }
+    $hashLines | Set-Content -LiteralPath (Join-Path $releaseDirectory 'SHA256SUMS.txt') -Encoding ascii
+
+    $unsigned = @($executables | Where-Object { (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status -ne 'Valid' })
+    if ($unsigned.Count -gt 0) {
+        Write-Warning 'Windows packages are not code-signed. Chrome and SmartScreen may block public downloads.'
+    }
 
     Write-Host "`nBuild completed: $releaseDirectory" -ForegroundColor Green
     if (Test-Path -LiteralPath $releaseDirectory) {

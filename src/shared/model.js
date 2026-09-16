@@ -12,6 +12,7 @@ const DEFAULT_ENVIRONMENT = Object.freeze({
 });
 
 const SITE_COLORS = Object.freeze(['blue', 'purple', 'green', 'orange', 'red', 'slate']);
+const STORAGE_MODES = Object.freeze(['persistent', 'incognito']);
 const DEVICE_TYPES = Object.freeze(['desktop', 'mobile']);
 const MOBILE_DEVICE_PROFILES = Object.freeze({
   'pixel-11-pro': Object.freeze({
@@ -82,6 +83,10 @@ function normalizeProxy(value = {}) {
     username: String(value.username || '').trim(),
     secretRef: String(value.secretRef || '').trim(),
   };
+}
+
+function normalizeStorageMode(value) {
+  return STORAGE_MODES.includes(value) ? value : 'persistent';
 }
 
 function normalizeEnvironment(value = {}) {
@@ -198,6 +203,7 @@ function createAccount(input = {}, site) {
     currentUrl: startUrl,
     tags: Array.isArray(input.tags) ? input.tags.map(String) : [],
     note: String(input.note || ''),
+    storageMode: normalizeStorageMode(input.storageMode),
     proxy: normalizeProxy(input.proxy),
     environment: normalizeEnvironment(input.environment),
     autoLogin: normalizeAutoLogin(input.autoLogin, startUrl),
@@ -230,12 +236,14 @@ module.exports = {
   MOBILE_DEVICE_PROFILES,
   MAX_AVATAR_DATA_URL_LENGTH,
   SITE_COLORS,
+  STORAGE_MODES,
   createAccount,
   createSite,
   normalizeAvatarDataUrl,
   normalizeAutoLogin,
   normalizeEnvironment,
   normalizeProxy,
+  normalizeStorageMode,
   normalizeUrl,
   nowIso,
   publicAccount,

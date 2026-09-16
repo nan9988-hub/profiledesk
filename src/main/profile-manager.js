@@ -77,6 +77,11 @@ class ProfileManager {
   getSession(accountId) {
     const existing = this.instances.get(accountId);
     if (existing) return existing.session;
+    const account = this.store.findAccount(accountId);
+    if (!account) throw new Error('账户不存在');
+    if (account.storageMode === 'incognito') {
+      return session.fromPartition(`profiledesk-incognito-${accountId}`, { cache: true });
+    }
     return session.fromPath(this.profilePath(accountId), { cache: true });
   }
 
@@ -193,7 +198,7 @@ class ProfileManager {
     const account = this.store.findAccount(accountId);
     if (!account) throw new Error('账户不存在');
     await this.enforceCapacity(accountId);
-    const ses = session.fromPath(this.profilePath(accountId), { cache: true });
+    const ses = this.getSession(accountId);
     this.configureSession(account, ses);
     await this.applyProxy(accountId, account.proxy);
 
@@ -247,14 +252,19 @@ class ProfileManager {
       lastOpenedAt: new Date().toISOString(),
       lastError: '',
     });
-    await contents.loadURL(normalizeUrl(account.currentUrl || account.startUrl));
+    await contents.loadURL(normalizeUrl(account.storageMode === 'incognito'
+      ? account.startUrl
+      : (account.currentUrl || account.startUrl)));
     if (options.activate !== false) this.activate(accountId);
     this.emit('started', { accountId });
     return { accountId, status: 'running' };
   }
 
   async handleNavigation(accountId, url) {
-    await this.store.updateAccount(accountId, { currentUrl: url, lastError: '' }).catch(() => {});
+    const account = this.store.findAccount(accountId);
+    if (account?.storageMode !== 'incognito') {
+      await this.store.updateAccount(accountId, { currentUrl: url, lastError: '' }).catch(() => {});
+    }
     this.emit('navigation', {
       accountId,
       url,
@@ -336,9 +346,10 @@ class ProfileManager {
   async disposeInstance(accountId, flush) {
     const instance = this.instances.get(accountId);
     if (!instance) return;
+    const incognito = this.store.findAccount(accountId)?.storageMode === 'incognito';
     const wasActive = this.activeId === accountId;
     try {
-      const flushResult = flush ? instance.session.flushStorageData() : null;
+      const flushResult = flush && !incognito ? instance.session.flushStorageData() : null;
       if (flushResult && typeof flushResult.then === 'function') await flushResult;
     } catch {
       // Closing the isolated view remains safe even if Chromium cannot flush a damaged profile.
@@ -348,6 +359,14 @@ class ProfileManager {
     try {
       if (!instance.view.webContents.isDestroyed()) instance.view.webContents.close();
     } catch {}
+    if (incognito) {
+      await Promise.all([
+        instance.session.clearCache().catch(() => {}),
+        instance.session.clearStorageData().catch(() => {}),
+        instance.session.closeAllConnections().catch(() => {}),
+      ]);
+      this.emit('incognito-cleared', { accountId });
+    }
     this.instances.delete(accountId);
     if (wasActive) {
       this.activeId = null;
@@ -494,6 +513,30 @@ class ProfileManager {
       }
     }
     return { pendingPaths };
+  }
+
+  async prepareStorageModeChange(accountId, nextMode) {
+    const account = this.store.findAccount(accountId);
+    if (!account) throw new Error('账户不存在');
+    const currentMode = account.storageMode === 'incognito' ? 'incognito' : 'persistent';
+    if (currentMode === nextMode) return { pendingPaths: [] };
+    if (this.instances.has(accountId)) await this.stop(accountId);
+    const oldSession = currentMode === 'incognito'
+      ? session.fromPartition(`profiledesk-incognito-${accountId}`, { cache: true })
+      : session.fromPath(this.profilePath(accountId), { cache: true });
+    await Promise.all([
+      oldSession.clearCache().catch(() => {}),
+      oldSession.clearStorageData().catch(() => {}),
+      oldSession.closeAllConnections().catch(() => {}),
+    ]);
+    if (nextMode !== 'incognito') return { pendingPaths: [] };
+    const target = this.profilePath(accountId);
+    try {
+      await fs.promises.rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      return { pendingPaths: [] };
+    } catch {
+      return { pendingPaths: [target] };
+    }
   }
 
   async shutdown() {

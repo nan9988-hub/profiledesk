@@ -19,6 +19,7 @@ const { runDiagnostics } = require('./diagnostics');
 const { SettingsService } = require('./settings-service');
 const { AuditLogger } = require('./audit-logger');
 const { DataDirectoryService } = require('./data-directory-service');
+const { normalizeStorageMode } = require('../shared/model');
 
 app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'disable_non_proxied_udp');
 
@@ -201,7 +202,10 @@ async function restorePreviousSessions() {
   restoreSessionsStarted = true;
   send('workspace:changed', store.publicState());
   const restoreIds = store.data.restoreIds
-    .filter((id) => store.findAccount(id))
+    .filter((id) => {
+      const account = store.findAccount(id);
+      return account && account.storageMode !== 'incognito';
+    })
     .slice(0, settings.publicSettings().maxRunningAccounts);
   let restoreCursor = 0;
   const restoreWorker = async () => {
@@ -385,6 +389,16 @@ function registerIpc() {
     const account = store.findAccount(id);
     if (!account) throw new Error('账户不存在');
     const safePatch = assertObject(patch);
+    const previousStorageMode = account.storageMode === 'incognito' ? 'incognito' : 'persistent';
+    let storageCleanup = { pendingPaths: [] };
+    if (Object.hasOwn(safePatch, 'storageMode')) {
+      safePatch.storageMode = normalizeStorageMode(safePatch.storageMode);
+      storageCleanup = await profiles.prepareStorageModeChange(id, safePatch.storageMode);
+      if (safePatch.storageMode === 'incognito') {
+        safePatch.currentUrl = safePatch.startUrl || account.startUrl;
+        safePatch.lastError = '';
+      }
+    }
     if (safePatch.password !== undefined) {
       const previousRef = account.autoLogin?.secretRef;
       safePatch.autoLogin = { ...(account.autoLogin || {}), ...(safePatch.autoLogin || {}) };
@@ -404,9 +418,16 @@ function registerIpc() {
       delete safePatch.proxyPassword;
     }
     const result = await store.updateAccount(id, safePatch);
+    if (previousStorageMode !== result.storageMode && result.storageMode === 'incognito') {
+      await snapshots.removeForAccounts([id]);
+      await store.removeSnapshotsForAccounts([id]);
+    }
+    if (storageCleanup.pendingPaths.length) {
+      await dataDirectories.scheduleAccountDataRemoval(rootDir, storageCleanup.pendingPaths);
+    }
     await logAction('account.updated', { accountId: id, fields: Object.keys(safePatch).filter((key) => !key.toLowerCase().includes('password')) });
     send('workspace:changed', store.publicState());
-    return result;
+    return { ...result, cleanupPending: storageCleanup.pendingPaths.length > 0 };
   });
   handleUnlocked('workspace:delete-accounts', (_event, ids) => deleteAccounts(ids));
 
@@ -446,6 +467,7 @@ function registerIpc() {
   handleUnlocked('snapshot:create', async (_event, id, label) => {
     const account = store.findAccount(id);
     if (!account) throw new Error('账户不存在');
+    if (account.storageMode === 'incognito') throw new Error('无痕账户不能保存状态快照');
     const result = await snapshots.create(account, profiles.getSession(id), label);
     await logAction('snapshot.created', { accountId: id, snapshotId: result.id, label: result.label });
     send('workspace:changed', store.publicState());
@@ -456,6 +478,7 @@ function registerIpc() {
     if (!metadata) throw new Error('快照不存在');
     const account = store.findAccount(metadata.accountId);
     if (!account) throw new Error('账户不存在');
+    if (account.storageMode === 'incognito') throw new Error('无痕账户不能还原状态快照');
     if (profiles.isRunning(account.id)) await profiles.stop(account.id);
     const payload = await snapshots.restore(metadata, account, profiles.getSession(account.id));
     await store.updateAccount(account.id, {
@@ -483,6 +506,7 @@ function registerIpc() {
           else if (action === 'clear-cache') await profiles.clear(id, 'cache');
           else if (action === 'snapshot') {
             const account = store.findAccount(id);
+            if (account?.storageMode === 'incognito') throw new Error('无痕账户不能保存状态快照');
             await snapshots.create(account, profiles.getSession(id));
           } else throw new Error('不支持的批量操作');
           results.push({ id, ok: true });
@@ -511,12 +535,16 @@ function registerIpc() {
     const sites = store.data.sites.filter((site) => selected.some((account) => account.siteId === site.id));
     const accounts = [];
     for (const account of selected) {
-      const ses = profiles.getSession(account.id);
-      await ses.flushStorageData();
       const portableAccount = structuredClone(account);
       portableAccount.proxy.secretRef = '';
       portableAccount.autoLogin.secretRef = '';
-      accounts.push({ account: portableAccount, cookies: await ses.cookies.get({}) });
+      let cookies = [];
+      if (account.storageMode !== 'incognito') {
+        const ses = profiles.getSession(account.id);
+        await ses.flushStorageData();
+        cookies = await ses.cookies.get({});
+      }
+      accounts.push({ account: portableAccount, cookies });
     }
     const payload = { format: 1, exportedAt: new Date().toISOString(), sites, accounts };
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -564,8 +592,8 @@ function registerIpc() {
         proxy: { ...(entry.account.proxy || {}), secretRef: '' },
         autoLogin: { ...(entry.account.autoLogin || {}), enabled: false, secretRef: '' },
       });
-      const ses = profiles.getSession(account.id);
-      for (const cookie of entry.cookies || []) {
+      const ses = account.storageMode === 'incognito' ? null : profiles.getSession(account.id);
+      for (const cookie of ses ? (entry.cookies || []) : []) {
         const domain = String(cookie.domain || '').replace(/^\./, '');
         if (!domain) continue;
         const next = {
@@ -581,7 +609,7 @@ function registerIpc() {
         if (cookie.sameSite && cookie.sameSite !== 'unspecified') next.sameSite = cookie.sameSite;
         await ses.cookies.set(next).catch(() => {});
       }
-      await ses.flushStorageData();
+      if (ses) await ses.flushStorageData();
       count += 1;
     }
     send('workspace:changed', store.publicState());

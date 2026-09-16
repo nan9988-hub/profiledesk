@@ -69,7 +69,26 @@ test('Windows build launcher always pauses and writes a persistent build log', (
   assert.match(command, /pause >nul/);
   assert.match(command, /build-windows\.log/);
   assert.match(powershell, /Start-Transcript/);
-  assert.match(powershell, /npm\.cmd install --allow-git=all/);
+  assert.match(powershell, /npm\.cmd ci --allow-git=all/);
   assert.match(powershell, /npm\.cmd run dist:win/);
   assert.match(powershell, /exit \$exitCode/);
+});
+
+test('incognito accounts use memory sessions, clear on close and skip snapshots', () => {
+  const profileManager = fs.readFileSync(path.join(root, 'src/main/profile-manager.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'src/main/main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'src/renderer/app.js'), 'utf8');
+  assert.match(profileManager, /session\.fromPartition\(`profiledesk-incognito-/);
+  assert.match(profileManager, /instance\.session\.clearStorageData/);
+  assert.match(main, /无痕账户不能保存状态快照/);
+  assert.match(renderer, /无痕模式（关闭即清除）/);
+});
+
+test('GitHub Windows build supports signing, Defender scanning and separate downloads', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/build-desktop.yml'), 'utf8');
+  assert.match(workflow, /CSC_LINK:\s*\$\{\{ secrets\.WIN_CSC_LINK \}\}/);
+  assert.match(workflow, /Start-MpScan/);
+  assert.match(workflow, /SHA256SUMS\.txt/);
+  assert.match(workflow, /ProfileDesk-Windows-Installer/);
+  assert.match(workflow, /ProfileDesk-Windows-Portable/);
 });
