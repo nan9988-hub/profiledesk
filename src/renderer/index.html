@@ -55,6 +55,7 @@
             <button data-command="reload" title="刷新">↻</button>
             <button data-command="home" title="首页">⌂</button>
           </div>
+          <button id="sound-toggle" class="sound-toggle" title="当前账户声音" aria-label="当前账户声音" disabled>🔊</button>
           <form id="address-form" class="address-wrap">
             <span id="security-indicator">—</span>
             <input id="address" autocomplete="off" spellcheck="false" placeholder="输入网址">
@@ -108,7 +109,7 @@
       <form id="editor-form" method="dialog">
         <header><strong id="editor-title">配置</strong><button type="button" data-close-dialog>×</button></header>
         <div id="editor-fields" class="dialog-fields"></div>
-        <footer><button type="button" data-close-dialog>取消</button><button id="editor-submit" value="default" class="primary">保存</button></footer>
+        <footer><button id="editor-delete-item" type="button" class="danger-button editor-delete-item" hidden>删除</button><button type="button" data-close-dialog>取消</button><button id="editor-submit" value="default" class="primary">保存</button></footer>
       </form>
     </dialog>
 

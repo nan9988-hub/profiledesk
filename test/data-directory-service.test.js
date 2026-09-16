@@ -84,3 +84,17 @@ test('pending account cleanup rejects paths outside profile and download roots',
   const root = await service.init();
   await assert.rejects(() => service.scheduleAccountDataRemoval(root, [path.join(parent, 'unrelated')]));
 });
+
+test('startup account cleanup can remove validated profile paths immediately', async (t) => {
+  const parent = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'profiledesk-account-cleanup-now-'));
+  t.after(() => fs.promises.rm(parent, { recursive: true, force: true }));
+  const service = new DataDirectoryService(path.join(parent, 'user-data'));
+  const root = await service.init();
+  const profile = path.join(root, 'profiles', 'pending-account');
+  await fs.promises.mkdir(profile, { recursive: true });
+  await fs.promises.writeFile(path.join(profile, 'Cache'), 'remove-on-start');
+  const result = await service.removeAccountDataNow(root, [profile]);
+  assert.equal(result.removed, 1);
+  assert.deepEqual(result.pendingPaths, []);
+  await assert.rejects(() => fs.promises.access(profile));
+});

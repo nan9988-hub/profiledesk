@@ -84,6 +84,25 @@ test('incognito accounts use memory sessions, clear on close and skip snapshots'
   assert.match(renderer, /无痕模式（关闭即清除）/);
 });
 
+test('account audio, right-click editing and deferred deletion are wired end to end', () => {
+  const html = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'src/renderer/app.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(root, 'src/preload/preload.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'src/main/main.js'), 'utf8');
+  const profiles = fs.readFileSync(path.join(root, 'src/main/profile-manager.js'), 'utf8');
+  assert.match(html, /id="sound-toggle"/);
+  assert.match(html, /id="editor-delete-item"/);
+  assert.match(renderer, /addEventListener\('contextmenu'/);
+  assert.match(renderer, /function editSite/);
+  assert.match(renderer, /删除业务站/);
+  assert.match(preload, /browser:set-muted/);
+  assert.match(main, /accounts\.deletion_scheduled/);
+  assert.match(main, /finalizePendingAccountDeletions/);
+  assert.match(profiles, /setAudioMuted/);
+  assert.match(profiles, /prepareAccountDeletion/);
+  assert.doesNotMatch(main, /cleanupPending\)\s*\{[\s\S]*relaunchSoon/);
+});
+
 test('GitHub Windows build supports signing, Defender scanning and separate downloads', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/build-desktop.yml'), 'utf8');
   assert.match(workflow, /CSC_LINK:\s*\$\{\{ secrets\.WIN_CSC_LINK \}\}/);

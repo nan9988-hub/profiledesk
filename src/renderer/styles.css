@@ -61,9 +61,9 @@ body.resizing-sidebar #app { transition: none; }
 .site-arrow { width: 10px; color: var(--muted); transition: transform .15s ease; }
 .site-group.is-collapsed .site-arrow { transform: rotate(-90deg); }
 .site-icon, .account-avatar { flex: 0 0 auto; display: grid; place-items: center; color: #dce5ff; background: #273b5b; font-weight: 700; }
-.site-icon { width: 24px; height: 24px; border-radius: 7px; font-size: 11px; }
+.site-icon { width: 24px; height: 24px; overflow: hidden; border-radius: 7px; font-size: 11px; }
 .account-avatar { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(145deg, #344d77, #263a5c); font-size: 12px; }
-.account-avatar img, .avatar-preview img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: inherit; }
+.site-icon img, .account-avatar img, .avatar-preview img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: inherit; }
 .site-color-blue .site-icon { background: #2854a5; }
 .site-color-purple .site-icon { background: #6740a4; }
 .site-color-green .site-icon { background: #246c5a; }
@@ -88,6 +88,11 @@ body.resizing-sidebar #app { transition: none; }
 .account-main span { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .account-row .row-delete { opacity: .72; padding: 4px 7px; color: #ff9ba6; }
 .account-row .row-delete:hover { opacity: 1; border-color: #9e4050; background: #351723; }
+.site-group.pending-deletion, .account-row.pending-deletion { filter: grayscale(.9); opacity: .48; }
+.site-group.pending-deletion .site-heading, .account-row.pending-deletion { cursor: not-allowed; }
+.account-row.pending-deletion { background: #111722; border-color: #303742; }
+.pending-placeholder { color: var(--bad); text-align: center; }
+.pending-label { color: #b8a1a5; font-size: 10px; white-space: nowrap; }
 .sidebar-footer { display: flex; align-items: center; gap: 5px; padding: 10px 9px; border-top: 1px solid var(--line); }
 .sidebar-footer button { padding-inline: 8px; }
 .footer-icon { margin-right: 3px; }
@@ -101,8 +106,10 @@ body.resizing-sidebar #app { transition: none; }
 #app.sidebar-collapsed .site-arrow,
 #app.sidebar-collapsed .site-heading .count,
 #app.sidebar-collapsed .account-row > input,
+#app.sidebar-collapsed .account-row > .pending-placeholder,
 #app.sidebar-collapsed .account-row > .dot,
 #app.sidebar-collapsed .account-main,
+#app.sidebar-collapsed .account-row > .pending-label,
 #app.sidebar-collapsed .account-row .row-delete,
 #app.sidebar-collapsed .sidebar-footer #export-package,
 #app.sidebar-collapsed .sidebar-footer #import-package,
@@ -132,6 +139,7 @@ body.resizing-sidebar #app { transition: none; }
 .topbar { grid-row: 1; }
 .nav-buttons { display: flex; gap: 4px; }
 .nav-buttons button { width: 34px; padding-inline: 0; }
+.sound-toggle { width: 36px; padding-inline: 0; }
 .address-wrap { flex: 1; min-width: 150px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: #091321; }
 #security-indicator { color: var(--good); font-size: 12px; }
 #address { width: 100%; border: 0; outline: 0; background: transparent; padding: 8px 0; }
@@ -166,6 +174,7 @@ dialog form > header, dialog form > footer { display: flex; align-items: center;
 dialog form > header { border-bottom: 1px solid var(--line); }
 dialog form > header button { margin-left: auto; padding: 3px 8px; }
 dialog form > footer { justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
+.editor-delete-item { margin-right: auto; }
 dialog form > p { color: var(--muted); padding: 0 15px; }
 dialog textarea { width: calc(100% - 30px); margin: 0 15px 15px; padding: 10px; resize: vertical; outline: none; }
 .dialog-fields { display: grid; grid-template-columns: 145px minmax(0, 1fr); align-items: center; gap: 11px 12px; padding: 16px; }

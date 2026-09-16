@@ -267,6 +267,23 @@ class DataDirectoryService {
     await this.save();
     return targets.length;
   }
+
+  async removeAccountDataNow(rootDir, paths) {
+    const root = this.assertOwnedRoot(rootDir);
+    if (!samePath(root, this.data.activeRoot)) throw new Error('只能清理当前数据目录中的账户文件');
+    await this.ensureOwnership(root);
+    const targets = (Array.isArray(paths) ? paths : []).map((item) => this.assertAccountDataPath(root, item));
+    const remaining = [];
+    for (const target of targets) {
+      await secureRemoveTree(target);
+      if (await pathExists(target)) remaining.push(target);
+    }
+    const selected = new Set(targets.map((item) => path.resolve(item)));
+    this.data.pendingDeletes = this.data.pendingDeletes.filter((item) => !selected.has(path.resolve(item)));
+    this.data.pendingDeletes = [...new Set([...this.data.pendingDeletes, ...remaining])].slice(0, 1000);
+    await this.save();
+    return { removed: targets.length - remaining.length, pendingPaths: remaining };
+  }
 }
 
 module.exports = { DataDirectoryService, secureRemoveTree };

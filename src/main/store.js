@@ -31,12 +31,22 @@ class WorkspaceStore {
         : (parsed.accounts || []).filter((account) => account.status === 'running').map((account) => account.id);
       this.data = {
         schemaVersion: 1,
-        sites: Array.isArray(parsed.sites) ? parsed.sites : [],
+        sites: Array.isArray(parsed.sites)
+          ? parsed.sites.map((site) => ({
+            ...site,
+            logoDataUrl: normalizeAvatarDataUrl(site.logoDataUrl),
+            pendingDeletion: Boolean(site.pendingDeletion),
+            deletionRequestedAt: site.pendingDeletion ? String(site.deletionRequestedAt || '') : null,
+          }))
+          : [],
         accounts: Array.isArray(parsed.accounts)
           ? parsed.accounts.map((account) => ({
             ...account,
             storageMode: normalizeStorageMode(account.storageMode),
-            status: 'stopped',
+            muted: Boolean(account.muted),
+            pendingDeletion: Boolean(account.pendingDeletion),
+            deletionRequestedAt: account.pendingDeletion ? String(account.deletionRequestedAt || '') : null,
+            status: account.pendingDeletion ? 'pending-delete' : 'stopped',
           }))
           : [],
         snapshots: Array.isArray(parsed.snapshots) ? parsed.snapshots : [],
@@ -81,6 +91,44 @@ class WorkspaceStore {
     this.data.sites.push(site);
     await this.save();
     return structuredClone(site);
+  }
+
+  async updateSite(id, patch) {
+    const site = this.findSite(id);
+    if (!site) throw new Error('业务站不存在');
+    if (site.pendingDeletion) throw new Error('业务站已等待下次启动删除');
+    if (Object.hasOwn(patch, 'name')) {
+      const name = String(patch.name || '').trim().slice(0, 80);
+      if (!name) throw new Error('业务站名称不能为空');
+      site.name = name;
+    }
+    if (Object.hasOwn(patch, 'homeUrl')) site.homeUrl = normalizeUrl(patch.homeUrl);
+    if (Object.hasOwn(patch, 'logoDataUrl')) site.logoDataUrl = normalizeAvatarDataUrl(patch.logoDataUrl);
+    if (Object.hasOwn(patch, 'color')) {
+      site.color = ['blue', 'purple', 'green', 'orange', 'red', 'slate'].includes(patch.color) ? patch.color : 'blue';
+    }
+    site.updatedAt = nowIso();
+    await this.save();
+    return structuredClone(site);
+  }
+
+  async markSitesPendingDeletion(ids) {
+    const selected = new Set(ids);
+    const requestedAt = nowIso();
+    for (const site of this.data.sites) {
+      if (!selected.has(site.id) || site.pendingDeletion) continue;
+      site.pendingDeletion = true;
+      site.deletionRequestedAt = requestedAt;
+      site.updatedAt = requestedAt;
+    }
+    await this.save();
+  }
+
+  async removeSites(ids) {
+    const selected = new Set(ids);
+    const occupied = new Set(this.data.accounts.map((account) => account.siteId));
+    this.data.sites = this.data.sites.filter((site) => !selected.has(site.id) || occupied.has(site.id));
+    await this.save();
   }
 
   async addAccount(input) {
@@ -137,7 +185,8 @@ class WorkspaceStore {
   async updateAccount(id, patch) {
     const account = this.findAccount(id);
     if (!account) throw new Error('账户不存在');
-    const allowed = ['name', 'avatarDataUrl', 'username', 'startUrl', 'currentUrl', 'note', 'tags', 'storageMode', 'proxy', 'environment', 'autoLogin', 'status', 'lastError', 'lastOpenedAt'];
+    if (account.pendingDeletion) throw new Error('账户已等待下次启动删除');
+    const allowed = ['name', 'avatarDataUrl', 'username', 'startUrl', 'currentUrl', 'note', 'tags', 'storageMode', 'muted', 'proxy', 'environment', 'autoLogin', 'status', 'lastError', 'lastOpenedAt'];
     for (const key of allowed) {
       if (!Object.hasOwn(patch, key)) continue;
       if (key === 'name') {
@@ -147,6 +196,7 @@ class WorkspaceStore {
       } else if (key === 'avatarDataUrl') account.avatarDataUrl = normalizeAvatarDataUrl(patch.avatarDataUrl);
       else if (key === 'username') account.username = String(patch.username || '').trim().slice(0, 300);
       else if (key === 'storageMode') account.storageMode = normalizeStorageMode(patch.storageMode);
+      else if (key === 'muted') account.muted = Boolean(patch.muted);
       else if (key === 'startUrl' || key === 'currentUrl') account[key] = normalizeUrl(patch[key]);
       else if (key === 'proxy') account.proxy = normalizeProxy({ ...account.proxy, ...patch.proxy });
       else if (key === 'environment') account.environment = normalizeEnvironment({ ...account.environment, ...patch.environment });
@@ -156,6 +206,25 @@ class WorkspaceStore {
     account.updatedAt = nowIso();
     await this.save();
     return publicAccount(account);
+  }
+
+  async markAccountsPendingDeletion(ids) {
+    const selected = new Set(ids);
+    const requestedAt = nowIso();
+    const marked = [];
+    for (const account of this.data.accounts) {
+      if (!selected.has(account.id) || account.pendingDeletion) continue;
+      account.pendingDeletion = true;
+      account.deletionRequestedAt = requestedAt;
+      account.status = 'pending-delete';
+      account.lastError = '';
+      account.updatedAt = requestedAt;
+      marked.push(account);
+    }
+    this.data.snapshots = this.data.snapshots.filter((item) => !selected.has(item.accountId));
+    this.data.restoreIds = this.data.restoreIds.filter((id) => !selected.has(id));
+    await this.save();
+    return marked.map(publicAccount);
   }
 
   async removeAccounts(ids) {
@@ -189,7 +258,7 @@ class WorkspaceStore {
     this.data.restoreIds = [...new Set(Array.isArray(ids) ? ids : [])]
       .filter((id) => {
         const account = this.findAccount(id);
-        return account && account.storageMode !== 'incognito';
+        return account && !account.pendingDeletion && account.storageMode !== 'incognito';
       });
     await this.save();
   }

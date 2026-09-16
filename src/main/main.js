@@ -100,48 +100,94 @@ function relaunchSoon() {
   }, 350);
 }
 
-async function deleteAccounts(ids) {
-  const selected = [...new Set(Array.isArray(ids) ? ids.map(String) : [])].slice(0, 500);
-  const accounts = selected.map((id) => store.findAccount(id)).filter(Boolean);
-  if (!accounts.length) throw new Error('没有可删除的账户');
-  const answer = await dialog.showMessageBox(mainWindow, {
-    type: 'warning',
-    title: '删除隔离账户',
-    message: `确定删除 ${accounts.length} 个账户？`,
-    detail: '将停止这些账户，并删除 Cookie、缓存、站点数据、下载目录、快照和已保存凭据。此操作不可撤销。',
-    buttons: ['删除账户', '取消'],
-    defaultId: 1,
-    cancelId: 1,
-    noLink: true,
-  });
-  if (answer.response !== 0) return { canceled: true, count: 0 };
+async function scheduleAccountDeletions(accounts) {
+  const selected = accounts.map((account) => account.id);
   const pendingPaths = [];
   for (const account of accounts) {
-    const result = await profiles.removeAccountData(account.id);
+    const result = await profiles.prepareAccountDeletion(account.id);
     pendingPaths.push(...result.pendingPaths);
   }
-  if (pendingPaths.length) await dataDirectories.scheduleAccountDataRemoval(rootDir, pendingPaths);
   const snapshotCount = await snapshots.removeForAccounts(selected);
   await vault.removeMany(accounts.flatMap((account) => [account.proxy?.secretRef, account.autoLogin?.secretRef]));
-  await store.removeAccounts(selected);
-  await logAction('accounts.deleted', {
+  await store.markAccountsPendingDeletion(selected);
+  if (pendingPaths.length) await dataDirectories.scheduleAccountDataRemoval(rootDir, pendingPaths);
+  await logAction('accounts.deletion_scheduled', {
     count: accounts.length,
     accountIds: accounts.map((account) => account.id),
     accountNames: accounts.map((account) => account.name),
     snapshotCount,
     restartCleanupPaths: pendingPaths.length,
   });
+  return { count: accounts.length, pendingPaths: pendingPaths.length };
+}
+
+async function deleteAccounts(ids) {
+  const selected = [...new Set(Array.isArray(ids) ? ids.map(String) : [])].slice(0, 500);
+  const accounts = selected.map((id) => store.findAccount(id)).filter((account) => account && !account.pendingDeletion);
+  if (!accounts.length) throw new Error('没有可删除的账户');
+  const answer = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    title: '删除隔离账户',
+    message: `确定删除 ${accounts.length} 个账户？`,
+    detail: '将立即停止账户、清除浏览数据并将账户置为不可打开；Profile和下载目录会在下次启动、其他账户恢复前删除。当前其他已登录窗口不会重启。此操作不可撤销。',
+    buttons: ['删除账户', '取消'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (answer.response !== 0) return { canceled: true, count: 0 };
+  await scheduleAccountDeletions(accounts);
   send('workspace:changed', store.publicState());
-  const cleanupPending = pendingPaths.length > 0;
-  if (cleanupPending) {
-    const restoreIds = [...profiles.instances.keys()];
-    shuttingDown = true;
-    await restoreSave.catch(() => {});
-    await store.setRestoreIds(restoreIds);
-    await profiles.shutdown();
-    relaunchSoon();
+  return { canceled: false, count: accounts.length, scheduled: true };
+}
+
+async function deleteSite(id) {
+  const site = store.findSite(String(id));
+  if (!site || site.pendingDeletion) throw new Error('业务站不存在或已等待删除');
+  const siteAccounts = store.data.accounts.filter((account) => account.siteId === site.id);
+  const accounts = siteAccounts.filter((account) => !account.pendingDeletion);
+  const answer = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    title: '删除业务站',
+    message: `确定删除业务站“${site.name}”？`,
+    detail: siteAccounts.length
+      ? `该业务站包含 ${siteAccounts.length} 个账户。账户会立即停止、清除浏览数据并置灰，下次启动时连同业务站一起删除。其他已登录窗口不会重启。`
+      : '该业务站将在下次启动时移除。此操作不可撤销。',
+    buttons: ['删除业务站', '取消'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (answer.response !== 0) return { canceled: true, count: 0 };
+  if (accounts.length) await scheduleAccountDeletions(accounts);
+  await store.markSitesPendingDeletion([site.id]);
+  await logAction('site.deletion_scheduled', { siteId: site.id, name: site.name, accountCount: accounts.length });
+  send('workspace:changed', store.publicState());
+  return { canceled: false, count: accounts.length, scheduled: true };
+}
+
+async function finalizePendingAccountDeletions() {
+  const accounts = store.data.accounts.filter((account) => account.pendingDeletion);
+  const sites = store.data.sites.filter((site) => site.pendingDeletion);
+  if (accounts.length) {
+    const paths = accounts.flatMap((account) => [
+      path.join(rootDir, 'profiles', account.id),
+      path.join(rootDir, 'downloads', account.id),
+    ]);
+    const cleanup = await dataDirectories.removeAccountDataNow(rootDir, paths);
+    await snapshots.removeForAccounts(accounts.map((account) => account.id));
+    await vault.removeMany(accounts.flatMap((account) => [account.proxy?.secretRef, account.autoLogin?.secretRef]));
+    await store.removeAccounts(accounts.map((account) => account.id));
+    await logAction('accounts.deletion_completed', {
+      count: accounts.length,
+      accountIds: accounts.map((account) => account.id),
+      remainingPaths: cleanup.pendingPaths.length,
+    });
   }
-  return { canceled: false, count: accounts.length, cleanupPending };
+  if (sites.length) {
+    await store.removeSites(sites.map((site) => site.id));
+    await logAction('sites.deletion_completed', { count: sites.length, siteIds: sites.map((site) => site.id) });
+  }
 }
 
 function send(channel, payload) {
@@ -159,7 +205,9 @@ function ensureUnlocked() {
 
 function cycleRunningAccount(offset) {
   if (!isUnlocked || !profiles) return;
-  const ids = store.data.accounts.map((account) => account.id).filter((id) => profiles.isRunning(id));
+  const ids = store.data.accounts
+    .filter((account) => !account.pendingDeletion && profiles.isRunning(account.id))
+    .map((account) => account.id);
   if (!ids.length) return;
   const currentIndex = ids.indexOf(profiles.activeId);
   const nextIndex = currentIndex === -1
@@ -204,7 +252,7 @@ async function restorePreviousSessions() {
   const restoreIds = store.data.restoreIds
     .filter((id) => {
       const account = store.findAccount(id);
-      return account && account.storageMode !== 'incognito';
+      return account && !account.pendingDeletion && account.storageMode !== 'incognito';
     })
     .slice(0, settings.publicSettings().maxRunningAccounts);
   let restoreCursor = 0;
@@ -373,6 +421,13 @@ function registerIpc() {
     send('workspace:changed', store.publicState());
     return result;
   });
+  handleUnlocked('workspace:update-site', async (_event, id, patch) => {
+    const result = await store.updateSite(String(id), assertObject(patch));
+    await logAction('site.updated', { siteId: result.id, fields: Object.keys(patch) });
+    send('workspace:changed', store.publicState());
+    return result;
+  });
+  handleUnlocked('workspace:delete-site', (_event, id) => deleteSite(id));
   handleUnlocked('workspace:add-account', async (_event, input) => {
     const result = await store.addAccount(assertObject(input));
     await logAction('account.added', { accountId: result.id, name: result.name, siteId: result.siteId });
@@ -439,6 +494,12 @@ function registerIpc() {
   handleUnlocked('browser:apply-environment', async (_event, id) => {
     const result = profiles.applyEnvironment(id, { reload: true });
     await logAction('account.environment_applied', { accountId: id, device: result.device });
+    return result;
+  });
+  handleUnlocked('browser:set-muted', async (_event, id, muted) => {
+    const result = await profiles.setMuted(String(id), Boolean(muted));
+    await logAction('account.audio_changed', { accountId: id, muted: result.muted });
+    send('workspace:changed', store.publicState());
     return result;
   });
   handleUnlocked('browser:set-bounds', (_event, bounds) => profiles.setBounds(assertObject(bounds)));
@@ -634,6 +695,9 @@ async function startApplication() {
   settings = new SettingsService(rootDir);
   audit = new AuditLogger(rootDir);
   await Promise.all([store.init(), vault.init(), settings.init(), audit.init()]);
+  snapshots = new SnapshotService(rootDir, store, vault);
+  await snapshots.init();
+  await finalizePendingAccountDeletions();
   await logAction('app.started', { version: app.getVersion(), dataDirectory: rootDir });
   isUnlocked = !settings.isLockedOnLaunch();
   startupLog('PHASE main-window');
@@ -661,8 +725,6 @@ async function startApplication() {
   startupLog('PHASE browser-manager');
   await profiles.init();
   await profiles.updateResourceLimits(settings.publicSettings());
-  snapshots = new SnapshotService(rootDir, store, vault);
-  await snapshots.init();
   registerIpc();
   registerGlobalShortcuts();
   startupLog('PHASE renderer');

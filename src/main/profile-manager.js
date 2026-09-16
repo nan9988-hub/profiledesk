@@ -197,6 +197,7 @@ class ProfileManager {
     }
     const account = this.store.findAccount(accountId);
     if (!account) throw new Error('账户不存在');
+    if (account.pendingDeletion) throw new Error('账户已等待下次启动删除');
     await this.enforceCapacity(accountId);
     const ses = this.getSession(accountId);
     this.configureSession(account, ses);
@@ -217,6 +218,7 @@ class ProfileManager {
     view.setVisible(false);
     const contents = view.webContents;
     contents.setBackgroundThrottling(true);
+    contents.setAudioMuted(Boolean(account.muted));
 
     contents.setWindowOpenHandler(({ url }) => {
       if (/^https?:\/\//i.test(url)) contents.loadURL(url).catch(() => {});
@@ -341,6 +343,18 @@ class ProfileManager {
     await this.store.updateAccount(accountId, { status: 'stopped' });
     this.emit('stopped', { accountId });
     return { accountId, status: 'stopped' };
+  }
+
+  async setMuted(accountId, muted) {
+    const account = this.store.findAccount(accountId);
+    if (!account) throw new Error('账户不存在');
+    if (account.pendingDeletion) throw new Error('账户已等待下次启动删除');
+    const nextMuted = Boolean(muted);
+    const contents = this.instances.get(accountId)?.view.webContents;
+    if (contents && !contents.isDestroyed()) contents.setAudioMuted(nextMuted);
+    const updated = await this.store.updateAccount(accountId, { muted: nextMuted });
+    this.emit('audio-state', { accountId, muted: nextMuted });
+    return updated;
   }
 
   async disposeInstance(accountId, flush) {
@@ -493,26 +507,19 @@ class ProfileManager {
     this.reportResourceUsage();
   }
 
-  async removeAccountData(accountId) {
+  async prepareAccountDeletion(accountId) {
     this.blockedAccountIds.add(accountId);
     await this.startQueue.catch(() => {});
+    if (this.instances.has(accountId)) await this.stop(accountId);
     const browserSession = this.getSession(accountId);
     await Promise.all([
       browserSession.clearCache().catch(() => {}),
       browserSession.clearStorageData().catch(() => {}),
       browserSession.closeAllConnections().catch(() => {}),
     ]);
-    await this.stop(accountId);
-    const targets = [this.profilePath(accountId), this.accountPath(this.downloadRoot, accountId)];
-    const pendingPaths = [];
-    for (const target of targets) {
-      try {
-        await fs.promises.rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 150 });
-      } catch {
-        pendingPaths.push(target);
-      }
-    }
-    return { pendingPaths };
+    return {
+      pendingPaths: [this.profilePath(accountId), this.accountPath(this.downloadRoot, accountId)],
+    };
   }
 
   async prepareStorageModeChange(accountId, nextMode) {

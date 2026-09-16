@@ -30,6 +30,8 @@ test('creates an isolated account model with safe defaults', () => {
   assert.equal(account.environment.mobileDevice, 'pixel-11-pro');
   assert.equal(account.environment.browserPreset, 'system');
   assert.equal(account.storageMode, 'persistent');
+  assert.equal(account.muted, false);
+  assert.equal(account.pendingDeletion, false);
 });
 
 test('normalizes persistent and incognito storage modes', () => {
@@ -39,10 +41,11 @@ test('normalizes persistent and incognito storage modes', () => {
 });
 
 test('normalizes site colors and validates local avatar data', () => {
-  const site = createSite({ name: 'Demo', homeUrl: 'https://example.com', color: 'purple' });
   const avatar = 'data:image/png;base64,iVBORw0KGgo=';
+  const site = createSite({ name: 'Demo', homeUrl: 'https://example.com', color: 'purple', logoDataUrl: avatar });
   const account = createAccount({ name: 'Avatar', avatarDataUrl: avatar }, site);
   assert.equal(site.color, 'purple');
+  assert.equal(site.logoDataUrl, avatar);
   assert.equal(account.avatarDataUrl, avatar);
   assert.equal(createSite({ name: 'Fallback', homeUrl: 'https://example.com', color: 'unsafe' }).color, 'blue');
   assert.throws(() => normalizeAvatarDataUrl('data:image/svg+xml;base64,PHN2Zz4='), /格式无效/);

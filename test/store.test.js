@@ -119,3 +119,40 @@ test('snapshot metadata can be removed when an account switches to incognito', a
   await store.removeSnapshotsForAccounts([account.id]);
   assert.deepEqual(store.data.snapshots, []);
 });
+
+test('site editing persists its name, URL, logo and color', async (t) => {
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'profiledesk-site-edit-'));
+  t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
+  const store = new WorkspaceStore(directory);
+  await store.init();
+  const site = await store.addSite({ name: 'Before', homeUrl: 'https://before.example' });
+  const logoDataUrl = 'data:image/webp;base64,UklGRg==';
+  await store.updateSite(site.id, {
+    name: 'After', homeUrl: 'https://after.example', logoDataUrl, color: 'orange',
+  });
+  const reloaded = new WorkspaceStore(directory);
+  await reloaded.init();
+  assert.equal(reloaded.findSite(site.id).name, 'After');
+  assert.equal(reloaded.findSite(site.id).homeUrl, 'https://after.example/');
+  assert.equal(reloaded.findSite(site.id).logoDataUrl, logoDataUrl);
+  assert.equal(reloaded.findSite(site.id).color, 'orange');
+});
+
+test('pending deletion accounts and sites remain visible but cannot be restored', async (t) => {
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'profiledesk-pending-delete-'));
+  t.after(() => fs.promises.rm(directory, { recursive: true, force: true }));
+  const store = new WorkspaceStore(directory);
+  await store.init();
+  const site = await store.addSite({ name: 'Delete group', homeUrl: 'https://example.com' });
+  const account = await store.addAccount({ siteId: site.id, name: 'Delete account', muted: true });
+  await store.setRestoreIds([account.id]);
+  await store.markAccountsPendingDeletion([account.id]);
+  await store.markSitesPendingDeletion([site.id]);
+  assert.equal(store.findAccount(account.id).pendingDeletion, true);
+  assert.equal(store.findAccount(account.id).status, 'pending-delete');
+  assert.equal(store.findAccount(account.id).muted, true);
+  assert.equal(store.findSite(site.id).pendingDeletion, true);
+  assert.deepEqual(store.data.restoreIds, []);
+  await assert.rejects(() => store.updateAccount(account.id, { name: 'No' }), /等待下次启动删除/);
+  await assert.rejects(() => store.updateSite(site.id, { name: 'No' }), /等待下次启动删除/);
+});

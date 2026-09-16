@@ -113,7 +113,7 @@ async function act(label, operation) {
 
 function refreshWorkspace(next) {
   workspace = next;
-  const valid = new Set(workspace.accounts.map((account) => account.id));
+  const valid = new Set(workspace.accounts.filter((account) => !account.pendingDeletion).map((account) => account.id));
   selectedIds = new Set([...selectedIds].filter((id) => valid.has(id)));
   if (activeAccountId && !valid.has(activeAccountId)) activeAccountId = '';
   renderTree();
@@ -132,22 +132,23 @@ function renderTree() {
     });
     if (query && !matching.length && !site.name.toLowerCase().includes(query)) continue;
     const isCollapsed = collapsedSiteIds.has(site.id) && !query;
-    blocks.push(`<section class="site-group${isCollapsed ? ' is-collapsed' : ''}">
-      <div class="site-heading site-color-${safeSiteColor(site.color)}" data-toggle-site="${site.id}" title="${escapeHtml(site.name)}">
-        <span class="site-arrow">▾</span><span class="site-icon">${escapeHtml(initial(site.name))}</span><span class="site-name">${escapeHtml(site.name)}</span><span class="count">${accounts.length}</span>
+    blocks.push(`<section class="site-group${isCollapsed ? ' is-collapsed' : ''}${site.pendingDeletion ? ' pending-deletion' : ''}">
+      <div class="site-heading site-color-${safeSiteColor(site.color)}" data-toggle-site="${site.id}" data-site-id="${site.id}" title="${escapeHtml(site.name)}${site.pendingDeletion ? ' · 等待下次启动删除' : ' · 右键编辑'}">
+        <span class="site-arrow">▾</span><span class="site-icon">${avatarContent(site.logoDataUrl, site.name)}</span><span class="site-name">${escapeHtml(site.name)}${site.pendingDeletion ? ' · 待删除' : ''}</span><span class="count">${accounts.length}</span>
       </div>
-      <div class="site-accounts">${matching.map((account) => `<div class="account-row${account.id === activeAccountId ? ' active' : ''}${account.storageMode === 'incognito' ? ' incognito' : ''}" data-account-id="${account.id}" title="${escapeHtml(account.name)} · ${account.storageMode === 'incognito' ? '无痕账户 · ' : ''}${escapeHtml(account.username || account.startUrl)}">
-        <input type="checkbox" data-select-account="${account.id}" ${selectedIds.has(account.id) ? 'checked' : ''} aria-label="选择${escapeHtml(account.name)}">
+      <div class="site-accounts">${matching.map((account) => `<div class="account-row${account.id === activeAccountId ? ' active' : ''}${account.storageMode === 'incognito' ? ' incognito' : ''}${account.pendingDeletion ? ' pending-deletion' : ''}" data-account-id="${account.id}" title="${escapeHtml(account.name)} · ${account.pendingDeletion ? '等待下次启动删除' : `${account.storageMode === 'incognito' ? '无痕账户 · ' : ''}${escapeHtml(account.username || account.startUrl)} · 右键编辑`}">
+        ${account.pendingDeletion ? '<span class="pending-placeholder">×</span>' : `<input type="checkbox" data-select-account="${account.id}" ${selectedIds.has(account.id) ? 'checked' : ''} aria-label="选择${escapeHtml(account.name)}">`}
         <span class="account-avatar">${avatarContent(account.avatarDataUrl, account.name)}</span>
         <span class="dot ${escapeHtml(account.status)}"></span>
-        <div class="account-main"><strong>${escapeHtml(account.name)}${account.storageMode === 'incognito' ? '<em class="privacy-badge">无痕</em>' : ''}</strong><span>${escapeHtml(account.username || account.startUrl)}</span></div>
-        <button class="row-delete" data-delete-account="${account.id}" title="删除账户" aria-label="删除${escapeHtml(account.name)}">删</button>
+        <div class="account-main"><strong>${escapeHtml(account.name)}${account.storageMode === 'incognito' ? '<em class="privacy-badge">无痕</em>' : ''}</strong><span>${account.pendingDeletion ? '下次启动自动清除' : escapeHtml(account.username || account.startUrl)}</span></div>
+        ${account.pendingDeletion ? '<span class="pending-label">待清理</span>' : `<button class="row-delete" data-delete-account="${account.id}" title="删除账户" aria-label="删除${escapeHtml(account.name)}">删</button>`}
       </div>`).join('')}</div>
     </section>`);
   }
   tree.innerHTML = blocks.join('') || '<div class="empty-state-small">暂无账户，点击上方按钮添加。</div>';
   $('#selected-count').textContent = selectedIds.size;
-  $('#select-all').checked = Boolean(workspace.accounts.length) && selectedIds.size === workspace.accounts.length;
+  const selectableCount = workspace.accounts.filter((account) => !account.pendingDeletion).length;
+  $('#select-all').checked = Boolean(selectableCount) && selectedIds.size === selectableCount;
 }
 
 function maximumSidebarWidth() {
@@ -231,6 +232,9 @@ function syncActiveUi() {
   $('#active-label').textContent = account ? `${siteById(account.siteId)?.name || ''} / ${account.name}${account.storageMode === 'incognito' ? ' · 无痕' : ''}` : '未选择账户';
   $('#create-snapshot').disabled = !account || account.storageMode === 'incognito';
   $('#create-snapshot').title = account?.storageMode === 'incognito' ? '无痕账户不会保存状态快照' : '保存当前账户状态快照';
+  $('#sound-toggle').disabled = !account || account.pendingDeletion;
+  $('#sound-toggle').textContent = account?.muted ? '🔇' : '🔊';
+  $('#sound-toggle').title = account?.muted ? '当前账户已静音，点击恢复声音' : '点击将当前账户静音';
   if (account) {
     if (document.activeElement !== $('#address')) $('#address').value = account.currentUrl || account.startUrl;
     $('#proxy-mode').value = account.proxy?.mode || 'system';
@@ -261,6 +265,7 @@ function requestBrowserBounds() {
 async function activateAccount(id) {
   const account = accountById(id);
   if (!account) return;
+  if (account.pendingDeletion) return showToast('该账户将在下次启动时删除，当前不可打开', true);
   activeAccountId = id;
   renderTree();
   syncActiveUi();
@@ -282,14 +287,17 @@ function selectField(label, name, value, options) {
   return `<label for="field-${name}">${escapeHtml(label)}</label><select id="field-${name}" name="${name}">${items}</select>`;
 }
 
-function avatarField(dataUrl = '', name = '账户') {
+function avatarField(dataUrl = '', name = '账户', options = {}) {
   const safe = safeAvatarDataUrl(dataUrl);
-  return `<label>账户头像</label><div class="avatar-picker">
+  const inputName = options.inputName || 'avatarDataUrl';
+  const label = options.label || '账户头像';
+  const subject = options.subject || '头像';
+  return `<label>${escapeHtml(label)}</label><div class="avatar-picker">
     <span class="avatar-preview" data-avatar-preview>${avatarContent(safe, name)}</span>
     <div class="avatar-buttons"><button type="button" data-pick-avatar>本地上传</button><button type="button" data-remove-avatar ${safe ? '' : 'disabled'}>移除</button></div>
-    <input type="hidden" name="avatarDataUrl" value="${escapeHtml(safe)}">
+    <input type="hidden" name="${escapeHtml(inputName)}" value="${escapeHtml(safe)}">
     <input type="file" data-avatar-file accept="image/png,image/jpeg,image/webp" hidden>
-  </div><span></span><span class="hint">支持PNG、JPG、WebP，原图最大5MB；保存前自动裁剪压缩为128×128，仅保存在本地账户数据中。</span>`;
+  </div><span></span><span class="hint">${escapeHtml(subject)}支持PNG、JPG、WebP，原图最大5MB；保存前自动裁剪压缩为128×128，仅保存在本地数据中。</span>`;
 }
 
 async function avatarDataFromFile(file) {
@@ -330,11 +338,11 @@ async function avatarDataFromFile(file) {
   }
 }
 
-function bindAvatarPicker() {
+function bindAvatarPicker(inputName = 'avatarDataUrl') {
   const root = $('#editor-fields');
   const fileInput = root.querySelector('[data-avatar-file]');
   if (!fileInput) return;
-  const valueInput = root.querySelector('[name="avatarDataUrl"]');
+  const valueInput = root.querySelector(`[name="${inputName}"]`);
   const preview = root.querySelector('[data-avatar-preview]');
   const removeButton = root.querySelector('[data-remove-avatar]');
   const nameInput = root.querySelector('[name="name"]');
@@ -396,6 +404,10 @@ function openEditor(title, fields, save) {
   $('#editor-title').textContent = title;
   $('#editor-fields').innerHTML = fields;
   editorSave = save;
+  const deleteButton = $('#editor-delete-item');
+  deleteButton.hidden = true;
+  deleteButton.onclick = null;
+  deleteButton.textContent = '删除';
   $('#editor-dialog').showModal();
   requestBrowserBounds();
   $('#editor-fields input, #editor-fields select')?.focus();
@@ -410,11 +422,42 @@ function addSite() {
   openEditor('添加业务站', [
     field('业务站名称', 'name', '', 'text', 'required maxlength="80"'),
     field('首页地址', 'homeUrl', 'https://', 'url', 'required'),
+    avatarField('', '业务站', { inputName: 'logoDataUrl', label: '业务站LOGO', subject: '业务站图标' }),
     selectField('折叠背景色', 'color', 'blue', SITE_COLOR_OPTIONS),
   ].join(''), async (data) => {
-    await api.addSite({ name: data.get('name'), homeUrl: data.get('homeUrl'), color: data.get('color') });
+    await api.addSite({
+      name: data.get('name'),
+      homeUrl: data.get('homeUrl'),
+      logoDataUrl: data.get('logoDataUrl'),
+      color: data.get('color'),
+    });
     showToast('业务站已添加');
   });
+  bindAvatarPicker('logoDataUrl');
+}
+
+function editSite(siteId) {
+  const site = siteById(siteId);
+  if (!site || site.pendingDeletion) return showToast('该业务站将在下次启动时删除', true);
+  openEditor(`编辑业务站 · ${site.name}`, [
+    field('业务站名称', 'name', site.name, 'text', 'required maxlength="80"'),
+    field('首页地址', 'homeUrl', site.homeUrl, 'url', 'required'),
+    avatarField(site.logoDataUrl, site.name, { inputName: 'logoDataUrl', label: '业务站LOGO', subject: '业务站图标' }),
+    selectField('折叠背景色', 'color', safeSiteColor(site.color), SITE_COLOR_OPTIONS),
+    '<span></span><span class="hint">修改业务站首页不会自动覆盖现有账户各自的启动地址。</span>',
+  ].join(''), async (data) => {
+    await api.updateSite(site.id, Object.fromEntries(data));
+    showToast('业务站配置已保存');
+  });
+  bindAvatarPicker('logoDataUrl');
+  const deleteButton = $('#editor-delete-item');
+  deleteButton.hidden = false;
+  deleteButton.textContent = '删除业务站';
+  deleteButton.onclick = async () => {
+    closeDialog($('#editor-dialog'));
+    const result = await act(`正在处理 ${site.name}…`, () => api.deleteSite(site.id));
+    if (!result.canceled) showToast('业务站及其账户已置灰，将在下次启动时自动清除');
+  };
 }
 
 function addAccount() {
@@ -440,9 +483,10 @@ function addAccount() {
   bindAvatarPicker();
 }
 
-function editAccount() {
-  const account = accountById(activeAccountId);
+function editAccount(accountId = activeAccountId) {
+  const account = accountById(accountId);
   if (!account) return showToast('请先选择账户', true);
+  if (account.pendingDeletion) return showToast('该账户将在下次启动时删除', true);
   const env = account.environment || {};
   const login = account.autoLogin || {};
   openEditor(`环境与登录 · ${account.name}`, [
@@ -516,6 +560,13 @@ function editAccount() {
   });
   bindAvatarPicker();
   bindUserAgentFields();
+  const deleteButton = $('#editor-delete-item');
+  deleteButton.hidden = false;
+  deleteButton.textContent = '删除账户';
+  deleteButton.onclick = async () => {
+    closeDialog($('#editor-dialog'));
+    await deleteAccountIds([account.id], account.name);
+  };
 }
 
 function openAppSettings() {
@@ -647,18 +698,23 @@ async function parseBatch() {
   });
 }
 
+async function deleteAccountIds(ids, label = '') {
+  const result = await act(label ? `正在删除 ${label}…` : `正在删除 ${ids.length} 个账户…`, () => api.deleteAccounts(ids));
+  if (!result.canceled) {
+    ids.forEach((id) => selectedIds.delete(id));
+    showToast(result.count > 1
+      ? `已将 ${result.count} 个账户置灰，下次启动自动清除`
+      : '账户已置灰并清除浏览数据，下次启动自动删除');
+  }
+  return result;
+}
+
 async function runBulk() {
   const ids = [...selectedIds];
   if (!ids.length) return showToast('请先勾选账户', true);
   const action = $('#bulk-action').value;
   if (action === 'delete') {
-    const result = await act(`正在删除 ${ids.length} 个账户…`, () => api.deleteAccounts(ids));
-    if (!result.canceled) {
-      selectedIds.clear();
-      showToast(result.cleanupPending
-        ? `已删除 ${result.count} 个账户，软件将重启完成文件清理`
-        : `已删除 ${result.count} 个账户及其本地数据`);
-    }
+    await deleteAccountIds(ids);
     return;
   }
   const results = await act(`正在执行 ${ids.length} 个账户…`, () => api.bulkRun(ids, action));
@@ -694,13 +750,26 @@ $('#account-tree').addEventListener('click', async (event) => {
     event.stopPropagation();
     const account = accountById(deleteButton.dataset.deleteAccount);
     if (!account) return;
-    const result = await act(`正在删除 ${account.name}…`, () => api.deleteAccounts([account.id]));
-    if (!result.canceled) showToast(result.cleanupPending ? '账户已删除，软件将重启完成文件清理' : '账户及其本地数据已删除');
+    await deleteAccountIds([account.id], account.name);
     return;
   }
   if (event.target.matches('[data-select-account]')) return;
   const row = event.target.closest('[data-account-id]');
   if (row) await activateAccount(row.dataset.accountId);
+});
+
+$('#account-tree').addEventListener('contextmenu', (event) => {
+  const row = event.target.closest('[data-account-id]');
+  if (row) {
+    event.preventDefault();
+    editAccount(row.dataset.accountId);
+    return;
+  }
+  const siteHeading = event.target.closest('[data-site-id]');
+  if (siteHeading) {
+    event.preventDefault();
+    editSite(siteHeading.dataset.siteId);
+  }
 });
 
 $('#account-tree').addEventListener('change', (event) => {
@@ -713,7 +782,7 @@ $('#account-tree').addEventListener('change', (event) => {
 $('#add-site').addEventListener('click', addSite);
 $('#add-account').addEventListener('click', addAccount);
 $('#empty-add-account').addEventListener('click', addAccount);
-$('#account-settings').addEventListener('click', editAccount);
+$('#account-settings').addEventListener('click', () => editAccount());
 $('#app-settings').addEventListener('click', openAppSettings);
 $('#toggle-sidebar').addEventListener('click', toggleSidebar);
 $('#proxy-config').addEventListener('click', editProxy);
@@ -724,8 +793,17 @@ $('#run-diagnostics').addEventListener('click', () => runDiagnostics().catch(() 
 $('#close-diagnostics').addEventListener('click', () => { $('#diagnostics-panel').hidden = true; requestBrowserBounds(); });
 $('#search').addEventListener('input', renderTree);
 
+$('#sound-toggle').addEventListener('click', async () => {
+  const account = accountById(activeAccountId);
+  if (!account || account.pendingDeletion) return showToast('请先选择可用账户', true);
+  const updated = await act(account.muted ? '正在恢复声音…' : '正在静音…', () => api.setMuted(account.id, !account.muted));
+  showToast(updated.muted ? '当前账户已静音' : '当前账户声音已恢复');
+});
+
 $('#select-all').addEventListener('change', (event) => {
-  selectedIds = event.target.checked ? new Set(workspace.accounts.map((account) => account.id)) : new Set();
+  selectedIds = event.target.checked
+    ? new Set(workspace.accounts.filter((account) => !account.pendingDeletion).map((account) => account.id))
+    : new Set();
   renderTree();
 });
 
