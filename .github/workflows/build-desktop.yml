@@ -6,6 +6,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
@@ -30,11 +33,19 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - run: npm install --allow-git=all
+      - name: Verify release tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/check-release-tag.js
+        env:
+          PROFILEDESK_RELEASE_TAG: ${{ github.ref_name }}
+      - run: npm ci --allow-git=all
       - run: npm run verify
       - name: Build Windows package
         if: runner.os == 'Windows'
         run: ${{ matrix.command }}
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
       - name: Build macOS package
         if: runner.os == 'macOS'
         run: ${{ matrix.command }}
@@ -44,9 +55,120 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - uses: actions/upload-artifact@v4
+      - name: Scan, verify and separate Windows packages
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          HAS_WINDOWS_SIGNING: ${{ secrets.WIN_CSC_LINK != '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $executables = @(Get-ChildItem -LiteralPath release -Filter 'ProfileDesk*.exe' -File)
+          $installer = @($executables | Where-Object Name -Match '^ProfileDesk Setup \d+\.\d+\.\d+\.exe$')
+          $portable = @($executables | Where-Object Name -Match '^ProfileDesk \d+\.\d+\.\d+\.exe$')
+          if ($installer.Count -ne 1) { throw "Expected one installer, found $($installer.Count)" }
+          if ($portable.Count -ne 1) { throw "Expected one portable executable, found $($portable.Count)" }
+          $deliverables = @($installer[0], $portable[0])
+
+          New-Item -ItemType Directory -Force -Path artifacts/installer, artifacts/portable | Out-Null
+          Copy-Item -LiteralPath $installer[0].FullName -Destination artifacts/installer/
+          Copy-Item -LiteralPath $portable[0].FullName -Destination artifacts/portable/
+
+          $hashLines = $deliverables | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash *$($_.Name)"
+          }
+          $hashLines | Set-Content -LiteralPath release/SHA256SUMS.txt -Encoding ascii
+          Copy-Item -LiteralPath release/SHA256SUMS.txt -Destination artifacts/installer/
+          Copy-Item -LiteralPath release/SHA256SUMS.txt -Destination artifacts/portable/
+
+          if ($env:HAS_WINDOWS_SIGNING -eq 'true') {
+            foreach ($file in $deliverables) {
+              $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+              if ($signature.Status -ne 'Valid') {
+                throw "Invalid Authenticode signature for $($file.Name): $($signature.Status)"
+              }
+            }
+          } else {
+            Write-Warning 'WIN_CSC_LINK is not configured. Packages are unsigned and may be blocked by Chrome or SmartScreen.'
+          }
+
+          if (Get-Command Start-MpScan -ErrorAction SilentlyContinue) {
+            Start-MpScan -ScanType CustomScan -ScanPath (Resolve-Path release).Path
+            $releasePath = (Resolve-Path release).Path
+            $detections = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object {
+              ($_.Resources -join ';') -like "*$releasePath*"
+            })
+            if ($detections.Count -gt 0) { throw 'Microsoft Defender detected a threat in the Windows build output.' }
+          } else {
+            Write-Warning 'Microsoft Defender command-line scan is unavailable on this runner.'
+          }
+      - name: Create macOS checksums
+        if: runner.os == 'macOS'
+        run: shasum -a 256 release/*.dmg > release/SHA256SUMS.txt
+      - name: Upload Windows installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact-name }}
-          path: ${{ matrix.artifact-path }}
+          name: ProfileDesk-Windows-Installer
+          path: artifacts/installer/*
           if-no-files-found: error
           compression-level: 0
+      - name: Upload Windows portable executable
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProfileDesk-Windows-Portable
+          path: artifacts/portable/*
+          if-no-files-found: error
+          compression-level: 0
+      - name: Upload macOS disk image
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: |
+            ${{ matrix.artifact-path }}
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+      - name: Prepare release files and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          find artifacts -type f \( -name '*.exe' -o -name '*.dmg' \) -exec cp '{}' release-files/ \;
+          test "$(find release-files -maxdepth 1 -type f -name '*.exe' | wc -l)" -eq 2
+          test "$(find release-files -maxdepth 1 -type f -name '*.dmg' | wc -l)" -eq 2
+          cd release-files
+          sha256sum -- *.exe *.dmg > SHA256SUMS.txt
+      - name: Create draft release or reuse an unfinished draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+            if [ "$is_draft" != 'true' ]; then
+              echo "Release $tag is already published; refusing to replace published assets."
+              exit 1
+            fi
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "ProfileDesk $tag"
+          fi
+          gh release upload "$tag" release-files/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
